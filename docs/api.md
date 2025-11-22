@@ -29,7 +29,7 @@ At the end of a command's lifetime, an EOF frame is sent. The payload of this fr
 - A 1-byte length marker, defining length `n`
 - A `n`-byte reason, which is UTF-8 text
 
-The status is used as a broad success/failure indicator, where any status from `00` to `9f` is successful, and any status from `a0` to `ff` is a failure. The reason is a string in the format `provider:reason`, for example `pbj:command_not_exist` for PB&J's default "this command doesn't exist" error. The provider string in the reason may also be your app ID, such as `org.billbot.catindex`.  
+The status is used as a broad success/failure indicator, where any status from `00` to `9f` is successful, and any status from `a0` to `ff` is a failure. The reason is a string in the format `provider:reason`, for example `pbj:command_not_exist` for PB&J's default "this command doesn't exist" error. The provider string in the reason may also be your app ID, such as `org.billbot.cats`.  
 The general method for rejecting a command is to use a standard status (see below) and a custom reason. Under no circumstances should a non-standard status code be used.
 
 The following status codes are available:

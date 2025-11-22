@@ -57,9 +57,20 @@ class Session:
         self.id = id
         self.token = b""
         self.expiry = 0
+        self.dead = False
+        self.__close_hook = []
+
+    def on_close(self, callback:typing.Callable[[typing.Self],typing.Awaitable[None]]):
+        "Add a hook to run on close."
+
+        self.__close_hook.append(callback)
+
 
     async def rotate_key(self, lifetime:float=30) -> str:
         "Generate a new session token, returning the client auth."
+
+        if self.dead is True:
+            raise RuntimeError("Cannot rotate a closed session")
 
         token = sha3_512(os.urandom(64)).hexdigest()
         self.token = sha3_512(bytes(token, "utf8")).digest()
@@ -72,13 +83,27 @@ class Session:
         
         self.expiry = time.perf_counter() + bump_by
 
+        if self.dead is True:
+            return False
+
         if bindings.sodium_memcmp(self.token, sha3_512(bytes(sent, "utf8")).digest()) is True:
             return True
         return False
+    
+    async def close(self):
+        "Close the session and mark it invalid, running all close hooks afterwards."
+
+        self.dead = True
+        self.expiry = 0
+
+        for i in self.__close_hook:
+            await i()
 
 # session handler
 
 class SessionHandler:
+    __ses: dict[int,Session]
+
     def __init__(self, key:str|bytes, hasher:PasswordHasher|None=None):
         if hasher is None:
             hasher = PasswordHasher()
@@ -88,6 +113,16 @@ class SessionHandler:
         self.__key = key
         self.__hasher = hasher
     
+    async def test_session(self, id:int, token:str) -> Session:
+        """Test a session ID and token, returning it on success.  
+        Raises `ValueError` if the session is invalid."""
+
+        if id in self.__ses:
+            if await self.__ses[id].validate(token) is True:
+                return self.__ses[id]
+        
+        raise ValueError("Invalid session")
+
     async def start_session(self) -> Session:
         "Start a new uninitialized session."
 

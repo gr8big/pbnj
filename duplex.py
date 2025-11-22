@@ -83,13 +83,7 @@ class QuartLongPollManager:
         
         to.feed_eof()
 
-    async def recv(self) -> typing.AsyncIterable[bytes]:
-        """Parse data in a request and place into the incoming queue.  
-        Then, wait until at lesat one outgoing message is available,  
-        and generate a returned response."""
-
-        start = time.perf_counter()
-
+    async def parse_incoming(self):
         reader = asyncio.StreamReader()
         asyncio.create_task(consume_request_body(reader))
 
@@ -97,6 +91,14 @@ class QuartLongPollManager:
             length = int.from_bytes(reader.readexactly(4), "little", signed=False)
             self.__incoming.put_nowait(await reader.readexactly(length))
 
+    async def recv(self) -> typing.AsyncIterable[bytes]:
+        """Parse data in a request and place into the incoming queue.  
+        Then, wait until at lesat one outgoing message is available,  
+        and generate a returned response."""
+
+        start = time.perf_counter()
+
+        await self.parse_incoming()
         elapsed = time.perf_counter() - start
         await asyncio.sleep(max(.008, self.__cooldown - elapsed))
 
@@ -134,6 +136,10 @@ class QuartLongPollHandler(main.BaseDuplexHandler):
                 self.__queues[cmd].put_nowait(data)
 
 
+    async def unpack_extra_incoming(self):
+        await self.__manager.parse_incoming()
+
+
     async def handle_request(self) -> typing.AsyncIterable[bytes]:
         if self.__active_producer is None:
             self.__active_producer = asyncio.create_task(self.__producer)
@@ -147,10 +153,84 @@ class QuartLongPollHandler(main.BaseDuplexHandler):
         return await self.__get_queue(cmd).get()
 
     async def clean(self, cmd:bytes):
-        if self.__active_producer is not None:
-            self.__active_producer.cancel()
-
-        await self.__manager.shutdown()
         if cmd in self.__queues:
             self.__queues[cmd].shutdown(True)
             del self.__queues[cmd]
+
+    async def shutdown(self):
+        if self.__active_producer is not None:
+            self.__active_producer.cancel()
+        
+        await self.__manager.shutdown()
+
+class QuartLongPollSessionManager(main.SessionHandler):
+    __poll_managers: dict[int,QuartLongPollHandler]
+    __cmd_managers: dict[int,main.CommandManager]
+    __tasks: dict[int,asyncio.Task]
+
+    def __init__(self, cmd_hndl:main.CommandHandler, key, hasher=None):
+        super().__init__(key, hasher)
+        self.__cmd_hndl = cmd_hndl
+        self.__poll_managers = {}
+        self.__cmd_managers = {}
+        self.__tasks = {}
+
+
+    async def clean_session(self, ses:main.Session):
+        handler = self.__poll_managers[ses.id]
+        manager = self.__cmd_managers[ses.id]
+        task = self.__tasks[ses.id]
+
+        await handler.shutdown()
+        task.cancel()
+
+    async def start_session(self):
+        ses = await super().start_session()
+
+        handler = QuartLongPollHandler()
+        manager = main.CommandManager(handler, self.__cmd_hndl)
+        self.__poll_managers[ses.id] = handler
+        self.__cmd_managers[ses.id] = manager
+        self.__tasks[ses.id] = asyncio.create_task(manager.run())
+
+        ses.on_close(self.clean_session)
+
+        return ses
+    
+    async def request_handler(self):
+        "Request handler. Can be used directly as a Quart endpoint."
+
+        try:
+            ses_id = int(request.headers.get("X-Pbj-Session-Id"))
+        except ValueError:
+            return "Bad Request", 400
+
+        ses_token = request.headers.get("X-Pbj-Session", "")
+
+        try:
+            ses = await self.test_session(ses_id, ses_token)
+        except ValueError:
+            return "Unauthorized", 401
+        
+        manager = self.__poll_managers[ses.id]
+        return await manager.recv()
+    
+    async def push_handler(self):
+        "Request handler. Can be used directly as a Quart endpoint."
+
+        try:
+            ses_id = int(request.headers.get("X-Pbj-Session-Id"))
+        except ValueError:
+            return "Bad Request", 400
+
+        ses_token = request.headers.get("X-Pbj-Session", "")
+
+        try:
+            ses = await self.test_session(ses_id, ses_token)
+        except ValueError:
+            return "Unauthorized", 401
+        
+        manager = self.__poll_managers[ses.id]
+        manager.unpack_extra_incoming()
+
+        return ""
