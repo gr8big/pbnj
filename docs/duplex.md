@@ -17,7 +17,7 @@ Intended to be uses as a session close hook.
 
 Start a session, opening a poll manager for it.
 
-Returns: `pbnj.Session`
+Returns: `main.Session`
 
 ### `request_handler()`
 
