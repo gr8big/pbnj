@@ -1,0 +1,12 @@
+{
+  "name": "pbnj-module",
+  "tree": {
+    "$className": "DataModel",
+
+    "ServerStorage": {
+      "libpbj": {
+        "$path": "client/but-jerry"
+      }
+    }
+  }
+}

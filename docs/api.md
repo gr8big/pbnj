@@ -17,6 +17,10 @@ To start a command, an initiation frame must be sent. This frame must be a root 
 - A 1-byte length marker, defining length `n`
 - A `n`-byte command type, which denotes the handler the client would like to initiate.
 
+> [!NOTE]
+> To ensure safe communications, the server and client should use very different command IDs.  
+> It is recommended to only allow clients to use 0 through 2147483647, and only allow the server to use 2147483648 through 4294967294.
+
 After a command has been initiated, any number of frames can be sent. Frames are a one-byte marker followed by the payload, where the marker denotes the type of frame. The following frame types are available:
 - `00` - Null frames - Utterly useless.
 - `40` - Binary frames - Sending of binary data.
