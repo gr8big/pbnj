@@ -23,6 +23,7 @@ app = Quart(__name__)
 @app.route("/pbj", methods=["PUT"])(manager.push_handler)
 ```
 
-The result is a PB&J instance available at `/pbj`.
+The result is a PB&J instance available at `/pbj`.  
+For a more detailed example, see [example.py](./example.py).
 
 A websocket-based manager is also available, but this will not be fully maintained and recommended until Roblox releases websocket support in live experiences.

@@ -4,6 +4,19 @@
 
 local http = game:GetService("HttpService")
 
+-- constants
+
+COMMAND_ROOT = "\xff\xff\xff\xff"
+
+FRAME_NULL = "\x00"
+FRAME_BINARY = "\x40"
+FRAME_TEXT = "\x41"
+FRAME_JSON = "\x50"
+FRAME_EOF = "\xff"
+
+STATUS_OK = 0x00
+STATUS_NOTFOUND = 0xa0
+
 -- classes
 
 export type Queue = {
@@ -29,7 +42,18 @@ export type DuplexHandler = {
     base_url: string,
     send: (self:DuplexHandler, v:string) -> nil,
     recv: (self:DuplexHandler, cmd:string) -> nil,
-    clean: (self:DuplexHandler, cmd:string) -> nil
+    clean: (self:DuplexHandler, cmd:string) -> nil,
+    connect: (self:DuplexHandler, key:string, auth_endpoint:string) -> nil
+}
+
+export type CommandWrapper = {
+    __wraps: DuplexHandler,
+    __command: string,
+    __locked: boolean,
+
+    send: (self:CommandWrapper, v:any) -> nil,
+    recv: (self:CommandWrapper) -> any,
+    close: (self:CommandWrapper) -> nil
 }
 
 -- utility
@@ -52,14 +76,19 @@ local duplex_recv_handler = function(self:DuplexHandler)
         if res.Success then
             local ctn: string = res.Body
             local count = string.unpack("<I4", ctn)
-            local cursor = 4
+            local cursor = 5
 
             for i = 1, count do
                 local length = string.unpack("<I4", ctn, cursor)
                 local content = string.sub(ctn, cursor + 4, cursor + 4 + length)
                 cursor += 4 + length
 
-                self.__incoming:put(content)
+                --self.__incoming:put(content)
+                local command = string.sub(content, 1, 4)
+                local data = string.sub(content, 5)
+                if self.__queues[command] then
+                    self.__queues[command]:put(data)
+                end
             end
         else
             warn(`PBJ API hit failed (status {res.StatusCode})`)
@@ -68,8 +97,8 @@ local duplex_recv_handler = function(self:DuplexHandler)
 end
 
 local duplex_send_handler = function(self:DuplexHandler)
+    local msg_buffer = {}
     while true do
-        local ctn = {}
 
         task.wait(.2) -- safety barrier for http service limits
         local messages = {self.__outgoing:get()}
@@ -77,17 +106,17 @@ local duplex_send_handler = function(self:DuplexHandler)
             messages[#messages+1] = self.__outgoing:get_nowait()
         end
 
-        ctn[#ctn+1] = string.pack("<I4", #messages)
+        msg_buffer[#msg_buffer+1] = string.pack("<I4", #messages)
         for _, v in pairs(messages) do
-            ctn[#ctn+1] = string.pack("<I4", #v)
-            ctn[#ctn+1] = v
+            msg_buffer[#msg_buffer+1] = string.pack("<I4", #v)
+            msg_buffer[#msg_buffer+1] = v
         end
 
         local res = http:RequestAsync(
             {
                 Url = self.base_url,
                 Method = "PUT",
-                Body = table.concat(ctn, ""),
+                Body = table.concat(msg_buffer, ""),
                 Headers = {
                     ["X-Pbj-Session-Id"] = self.__session_id,
                     ["X-Pbj-Session"] = self.__session_token,
@@ -99,7 +128,25 @@ local duplex_send_handler = function(self:DuplexHandler)
         if not res.Success then
             warn(`PBJ API hit failed (status {res.StatusCode})`)
         end
+        table.clear(msg_buffer)
     end
+end
+
+
+local pack_eof = function(status:number, message:string): string
+    return string.pack("B<s1", status, message)
+end
+
+local pack_frame = function(v:any): string
+    local tpe = typeof(v)
+    if tpe == "string" then
+        -- either string or bytes, TODO: detect the correct frame type and don't just default to binary
+        return FRAME_BINARY.. v
+    elseif tpe == "table" or tpe == "number" or tpe == "boolean" then
+        return FRAME_JSON.. http:JSONEncode(v)
+    end
+
+    error(`Cannot pack frame for type '{tpe}'`, 0)
 end
 
 -- templates
@@ -155,9 +202,6 @@ local tmp_duplexhandler: DuplexHandler = {
         self.__queues = {}
         self.__cmd_progress = 0
         self.base_url = base_url
-
-        self.__task_i = task.spawn(duplex_recv_handler)
-        self.__task_o = task.spawn(duplex_send_handler)
     end,
 
     __get_queue = function(self:DuplexHandler, cmd:string): Queue
@@ -167,8 +211,29 @@ local tmp_duplexhandler: DuplexHandler = {
         return self.__queues[cmd]
     end,
 
+
+    connect = function(self:DuplexHandler, key:string, auth_endpoint:string?)
+        local res = http:RequestAsync(
+            {
+                Url = auth_endpoint or `{self.base_url}/auth`,
+                Body = key,
+                Method = "POST"
+            }
+        )
+        if not res.Success then
+            error(`Failed to connect to PB&J instance: HTTP status {res.StatusCode}`, 0)
+        end
+
+        self.__session_id = res.Headers["x-pbj-session-id"]
+        self.__session_token = res.Headers["x-pbj-session"]
+
+        self.__task_i = task.spawn(duplex_recv_handler, self)
+        self.__task_o = task.spawn(duplex_send_handler, self)
+    end,
+
+
     send = function(self:DuplexHandler, v:string)
-        self.__outgoing[#self.__outgoing+1] = v
+        self.__outgoing:put(v)
     end,
     recv = function(self:DuplexHandler, cmd:string): any
         return self:__get_queue(cmd):get()
@@ -178,6 +243,47 @@ local tmp_duplexhandler: DuplexHandler = {
             table.clear(self.__queues[cmd])
             self.__queues[cmd] = nil
         end
+    end
+}
+
+local tmp_commandwrapper: CommandWrapper = {
+    __init__ = function(self:CommandWrapper, wraps:DuplexHandler, cmd_id:string)
+        self.__wraps = wraps
+        self.__command = cmd_id
+        self.__locked = false
+    end,
+
+    send = function(self:CommandWrapper, v:any)
+        if self.__locked then
+            error("Attempt to operate on closed command wrapper", 0)
+        end
+
+        self.__wraps:send(self.__command + pack_frame(v))
+    end,
+    recv = function(self:CommandWrapper): any
+        if self.__locked then
+            error("Attempt to operate on closed command wrapper", 0)
+        end
+
+        local data = self.__wraps:recv(self.__command)
+        local frame = string.sub(data, 1, 1)
+        data = string.sub(data, 2)
+
+        if frame == FRAME_NULL then
+            return
+        elseif frame == FRAME_BINARY or frame == FRAME_TEXT then
+            return data
+        elseif frame == FRAME_JSON then
+            return http:JSONDecode(data)
+        elseif frame == FRAME_EOF then
+            error("EOF Error", 0)
+        end
+
+        error(`Server sent invalid frame type: {frame}`, 0)
+    end,
+    close = function(self:CommandWrapper)
+        self.__locked = true
+        self.__wraps:clean(self.__command)
     end
 }
 
@@ -206,7 +312,8 @@ end
 
 cnstr = {
     Queue = constructor(tmp_queue),
-    DuplexHandler = constructor(tmp_duplexhandler)
+    DuplexHandler = constructor(tmp_duplexhandler),
+    CommandWrapper = constructor(tmp_commandwrapper)
 }
 
 -- module
@@ -225,5 +332,13 @@ return {
     -- * @returns {DuplexHandler}
     DuplexHandler = function(base_url:string): DuplexHandler
         return cnstr.DuplexHandler(base_url)
+    end,
+
+    -- Wrapper around a `DuplexHandler` to manage a single command.
+    -- * @param {DuplexHandler} The handler to wrap.
+    -- * @param {string} command The 4-byte command ID.
+    -- * @returns {CommandWrapper}
+    CommandWrapper = function(wraps:DuplexHandler, command:string): CommandWrapper
+        return cnstr.CommandWrapper(wraps, command)
     end
 }

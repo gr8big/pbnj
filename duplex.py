@@ -70,8 +70,7 @@ class QuartLongPollManager:
         self.__outgoing.put_nowait(data)
 
     async def pack_outgoing(self, to:asyncio.StreamReader):
-        data = []
-        await self.__outgoing.get()
+        data = [await self.__outgoing.get()]
 
         while not self.__outgoing.empty():
             data.append(self.__outgoing.get_nowait())
@@ -88,10 +87,10 @@ class QuartLongPollManager:
         asyncio.create_task(consume_request_body(reader))
 
         for i in range(int.from_bytes(await reader.readexactly(4), "little", signed=False)):
-            length = int.from_bytes(reader.readexactly(4), "little", signed=False)
+            length = int.from_bytes(await reader.readexactly(4), "little", signed=False)
             self.__incoming.put_nowait(await reader.readexactly(length))
 
-    async def recv(self) -> typing.AsyncIterable[bytes]:
+    async def recv(self) -> typing.AsyncGenerator[bytes]:
         """Parse data in a request and place into the incoming queue.  
         Then, wait until at lesat one outgoing message is available,  
         and generate a returned response."""
@@ -105,7 +104,7 @@ class QuartLongPollManager:
         result = asyncio.StreamReader()
         asyncio.create_task(self.pack_outgoing(result))
 
-        return await dump_request_body(result)
+        return dump_request_body(result)
 
     async def get(self) -> bytes:
         return await self.__incoming.get()
@@ -125,10 +124,11 @@ class QuartLongPollHandler(main.BaseDuplexHandler):
     def __get_queue(self, cmd:bytes) -> asyncio.Queue:
         if not cmd in self.__queues:
             self.__queues[cmd] = asyncio.Queue()
+        return self.__queues[cmd]
 
     async def __producer(self):
         while True:
-            data = self.__manager.get()
+            data = await self.__manager.get()
             cmd = data[:4]
             data = data[4:]
 
@@ -139,6 +139,10 @@ class QuartLongPollHandler(main.BaseDuplexHandler):
     async def unpack_extra_incoming(self):
         await self.__manager.parse_incoming()
 
+
+    async def start(self):
+        if self.__active_producer is None:
+            self.__active_producer = asyncio.create_task(self.__producer())
 
     async def handle_request(self) -> typing.AsyncIterable[bytes]:
         if self.__active_producer is None:
@@ -162,6 +166,9 @@ class QuartLongPollHandler(main.BaseDuplexHandler):
             self.__active_producer.cancel()
         
         await self.__manager.shutdown()
+
+    async def get_response_body(self) -> bytes:
+        return await self.__manager.recv()
 
 class QuartLongPollSessionManager(main.SessionHandler):
     __poll_managers: dict[int,QuartLongPollHandler]
@@ -191,6 +198,7 @@ class QuartLongPollSessionManager(main.SessionHandler):
         manager = main.CommandManager(handler, self.__cmd_hndl)
         self.__poll_managers[ses.id] = handler
         self.__cmd_managers[ses.id] = manager
+        await handler.start()
         self.__tasks[ses.id] = asyncio.create_task(manager.run())
 
         ses.on_close(self.clean_session)
@@ -202,7 +210,7 @@ class QuartLongPollSessionManager(main.SessionHandler):
 
         try:
             ses_id = int(request.headers.get("X-Pbj-Session-Id"))
-        except ValueError:
+        except (ValueError, TypeError):
             return "Bad Request", 400
 
         ses_token = request.headers.get("X-Pbj-Session", "")
@@ -213,7 +221,7 @@ class QuartLongPollSessionManager(main.SessionHandler):
             return "Unauthorized", 401
         
         manager = self.__poll_managers[ses.id]
-        return await manager.recv()
+        return await manager.get_response_body()
     
     async def push_handler(self):
         "Request handler. Can be used directly as a Quart endpoint."
@@ -231,6 +239,6 @@ class QuartLongPollSessionManager(main.SessionHandler):
             return "Unauthorized", 401
         
         manager = self.__poll_managers[ses.id]
-        manager.unpack_extra_incoming()
+        await manager.unpack_extra_incoming()
 
         return ""

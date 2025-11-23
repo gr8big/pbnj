@@ -49,6 +49,8 @@ async def pack_frame(v:typing.Any) -> bytes:
             or isinstance(v, int)
             or isinstance(v, bool)):
         return FRAME_JSON + bytes(json.dumps(v), "utf8")
+    
+    raise ValueError(f"Cannot pack frame for type '{type(v)}'")
 
 # session class
 
@@ -126,10 +128,10 @@ class SessionHandler:
     async def start_session(self) -> Session:
         "Start a new uninitialized session."
 
-        ses = Session(cur_id)
-
         cur_id = self.__id_prog + 1
         self.__id_prog = cur_id
+
+        ses = Session(cur_id)
 
         self.__ses[cur_id] = ses
         return ses
@@ -177,6 +179,7 @@ class CommandDuplexContext:
         self.__cmd = cmd_id
     
     async def send(self, data:str|bytes|dict|list|int|float):
+        print("sending", data, "for", self.__cmd)
         await self.__wraps.send(self.__cmd + await pack_frame(data))
 
     async def recv(self) -> str|bytes|dict|list|int|float|None:
@@ -193,9 +196,11 @@ class CommandDuplexContext:
                 return str(data, "utf8")
             case b"\x50":
                 return json.loads(data)
+            
+        raise ValueError(f"Invalid frame type: {frame[0]}")
     
     async def close(self, status:bytes=b"\x00", reason:str="pbj:ok"):
-        await self.__wraps.send(await pack_eof(status, reason))
+        await self.__wraps.send(self.__cmd + await pack_eof(status, reason))
 
     async def __aenter__(self):
         return self
