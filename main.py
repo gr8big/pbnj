@@ -198,6 +198,7 @@ class CommandDuplexContext:
                 self.__lock = True
                 self.__wraps.clean(self.__cmd)
                 self.__final_queue.shutdown(True)
+                break
             else:
                 self.__final_queue.put_nowait(data)
 
@@ -235,6 +236,7 @@ class CommandDuplexContext:
         await self.__wraps.send(self.__cmd + await pack_eof(status, reason))
         self.__wraps.clean(self.__cmd)
         self.__final_queue.shutdown(True)
+        self.__producer.cancel()
 
     async def __aenter__(self):
         return self
