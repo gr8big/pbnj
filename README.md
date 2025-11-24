@@ -2,6 +2,11 @@
 
 An interface for connecting Roblox game server to remote, self-hosted applications.
 
+> [!WARNING]
+> The PB&J API is in no way ready for use in a production environment.  
+> It is very new software and has not been adequately tested for security or stability.  
+> I'M WORKING ON IT!
+
 ## Install
 
 ### Server Install
