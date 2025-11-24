@@ -5,7 +5,7 @@
 
     "ServerStorage": {
       "libpbj": {
-        "$path": "client/but-jerry"
+        "$path": "client"
       }
     }
   }

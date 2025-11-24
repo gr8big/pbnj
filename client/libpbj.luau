@@ -1,86 +1,47 @@
 --!native
 
-export type _Queue = {}
+-- imports
 
-local function Queue(): _Queue
-    local queue: _Queue = {}
-    queue.content = {}
+local util = require(script.Parent:WaitForChild("util"))
 
-    -- * Generate a formatted string for a modifier and baseline.
-    -- * @param {string} modifier The modifier.
-    -- * @param {string} baseline The baseline.
-    -- * @returns {string} The formatted string
-    function queue:first(self)
-        return self.content[1]
-    end
+-- the class
 
-    local mt = {
-		__tostring = function (self)
-			return self.Name
-		end,
-        __index = function(self, index)
-            return self.content[index]
-        end,
+export type PbjApi = {
+    __id_prog: number,
 
-	}
-    setmetatable(queue,mt)
-    return queue
-end
+    wraps: util.DuplexHandler,
+    connect: (self:PbjApi, key:string, auth_endpoint:string?) -> nil,
+    run: (self:PbjApi, command:string) -> util.CommandWrapper
+}
 
-export type PbjApi = {}
+-- the template
 
-local Pbjapi = {} :: PbjApi -- delete?
-Pbjapi.__index = Pbjapi -- delete?
-
-local a_template = {
-    -- * Generate a formatted string for a modifier and baseline.
-    -- * @param {string} modifier The modifier.
-    -- * @param {string} baseline The baseline.
-    -- * @returns {string} The formatted string
-    start_connection = function(self)
-        
+local tmp_pbjapi: PbjApi = {
+    __init__ = function(self:PbjApi, base_url:string)
+        self.__id_prog = 0
+        self.wraps = util.DuplexHandler(base_url)
     end,
 
-    -- * Generate a formatted string for a modifier and baseline.
-    -- * @param {string} modifier The modifier.
-    -- * @param {string} baseline The baseline.
-    -- * @returns {string} The formatted string
-    send_command = function(self)
-        
+    connect = function(self:PbjApi, key:string, auth_endpoint:string?)
+        self.wraps:connect(key, auth_endpoint)
     end,
+    run = function(self:PbjApi, command:string): util.CommandWrapper
+        local id = self.__id_prog
+        self.__id_prog = (self.__id_prog + 1) % 2147483648
 
-    -- * Generate a formatted string for a modifier and baseline.
-    -- * @param {string} modifier The modifier.
-    -- * @param {string} baseline The baseline.
-    -- * @returns {string} The formatted string
-    disconnect = function(self)
-        
-    end,
-    -- * Generate a formatted string for a modifier and baseline.
-    -- * @param {string} modifier The modifier.
-    -- * @param {string} baseline The baseline.
-    -- * @returns {string} The formatted string
-    init = function(self)
-        local pbjapi: PbjApi = {}
-        pbjapi.connection = nil
-        pbjapi.cmd_queue = Queue()
-        pbjapi.res_queue = Queue()
-
-	    return pbjapi
+        self.wraps:send(string.pack("c4<I4s1", "\xff\xff\xff\xff", id, command))
+        return util.CommandWrapper(self.wraps, string.pack("<I4", id))
     end
 }
-function deep_copy(v)
-    local res = {}
-    for i, j in pairs(v) do
-        if type(j) == "table" then
-            res[i] = deep_copy(j)
-        else
-            res[i] = j
-        end
+
+-- the constructor
+
+local PbjApi = util.constructor(tmp_pbjapi)
+
+-- module
+
+return {
+    new = function(base_url:string): PbjApi
+        return PbjApi(base_url)
     end
-    return res
-end
-
-local PbjApi : PbjApi = deep_copy(a_template)
-
-return  {new = PbjApi}
+}
