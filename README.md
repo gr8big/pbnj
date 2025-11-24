@@ -27,3 +27,7 @@ The result is a PB&J instance available at `/pbj`.
 For a more detailed example, see [example.py](./example.py).
 
 A websocket-based manager is also available, but this will not be fully maintained and recommended until Roblox releases websocket support in live experiences.
+
+## Licensing
+
+This project is licensed under the GNU GPL v3. For more details see [LICENSE.md](./LICENSE.md).
