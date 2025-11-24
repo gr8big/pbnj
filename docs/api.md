@@ -17,10 +17,6 @@ To start a command, an initiation frame must be sent. This frame must be a root 
 - A 1-byte length marker, defining length `n`
 - A `n`-byte command type, which denotes the handler the client would like to initiate.
 
-> [!NOTE]
-> To ensure safe communications, the server and client should use very different command IDs.  
-> It is recommended to only allow clients to use 0 through 2147483647, and only allow the server to use 2147483648 through 4294967294.
-
 After a command has been initiated, any number of frames can be sent. Frames are a one-byte marker followed by the payload, where the marker denotes the type of frame. The following frame types are available:
 - `00` - Null frames - Utterly useless.
 - `40` - Binary frames - Sending of binary data.
@@ -33,7 +29,7 @@ At the end of a command's lifetime, an EOF frame is sent. The payload of this fr
 - A 1-byte length marker, defining length `n`
 - A `n`-byte reason, which is UTF-8 text
 
-The status is used as a broad success/failure indicator, where any status from `00` to `9f` is successful, and any status from `a0` to `ff` is a failure. The reason is a string in the format `provider:reason`, for example `pbj:command_not_exist` for PB&J's default "this command doesn't exist" error. The provider string in the reason may also be your app ID, such as `org.billbot.cats`.  
+The status is used as a broad success/failure indicator, where any status from `00` to `9f` is successful, and any status from `a0` to `ff` is a failure. The reason is a string in the format `provider:reason`, for example `pbj:command_not_exist` for PB&J's default "this command doesn't exist" error. The provider string in the reason may also be your reverse-DNS app ID, such as `org.billbot.cats`, to help prevent potential conflicts.  
 The general method for rejecting a command is to use a standard status (see below) and a custom reason. Under no circumstances should a non-standard status code be used.
 
 The following status codes are available:

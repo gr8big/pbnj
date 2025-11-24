@@ -52,6 +52,9 @@ async def pack_frame(v:typing.Any) -> bytes:
     
     raise ValueError(f"Cannot pack frame for type '{type(v)}'")
 
+async def unpack_eof(data:bytes) -> tuple[bytes,str]:
+    return data[:1], str(data[2:], "utf8")
+
 # session class
 
 class Session:
@@ -177,13 +180,39 @@ class CommandDuplexContext:
     def __init__(self, wraps:BaseDuplexHandler, cmd_id:bytes):
         self.__wraps = wraps
         self.__cmd = cmd_id
+        self.__final_queue = asyncio.Queue()
+        self.__producer = asyncio.create_task(self.__consumer())
+        self.__lock = True
+        self.close_status = -1
+        self.close_reason = ""
+
+
+    async def __consumer(self):
+        while True:
+            data = await self.__wraps.recv(self.__cmd)
+
+            if data.startswith(FRAME_EOF):
+                status, msg = await unpack_eof(data)
+                self.close_status = status[0]
+                self.close_reason = msg
+                self.__lock = True
+                self.__wraps.clean(self.__cmd)
+                self.__final_queue.shutdown(True)
+            else:
+                self.__final_queue.put_nowait(data)
+
     
     async def send(self, data:str|bytes|dict|list|int|float):
-        print("sending", data, "for", self.__cmd)
+        if self.__lock is True:
+            raise RuntimeError("Attempt to operate on closed command context")
+
         await self.__wraps.send(self.__cmd + await pack_frame(data))
 
     async def recv(self) -> str|bytes|dict|list|int|float|None:
-        data = await self.__wraps.recv(self.__cmd)
+        if self.__lock is True:
+            raise RuntimeError("Attempt to operate on closed command context")
+
+        data = await self.__final_queue.get()
         frame = data[:1]
         data = data[1:]
 
@@ -200,7 +229,12 @@ class CommandDuplexContext:
         raise ValueError(f"Invalid frame type: {frame[0]}")
     
     async def close(self, status:bytes=b"\x00", reason:str="pbj:ok"):
+        if self.__lock is True:
+            raise RuntimeError("Attempt to operate on closed command context")
+
         await self.__wraps.send(self.__cmd + await pack_eof(status, reason))
+        self.__wraps.clean(self.__cmd)
+        self.__final_queue.shutdown(True)
 
     async def __aenter__(self):
         return self

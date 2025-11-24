@@ -5,11 +5,13 @@ from pbnj import main, duplex
 from argon2 import PasswordHasher
 from quart import Quart, Response, request
 
-# prepare pb&j
+# Prepare password hasher & PB&J command handler.
 
 hasher = PasswordHasher()
 
 cmd_handler = main.CommandHandler()
+
+# Simple example command.
 
 @cmd_handler.command("example")
 async def cmd_example(pipe:main.CommandDuplexContext):
@@ -18,6 +20,8 @@ async def cmd_example(pipe:main.CommandDuplexContext):
     await pipe.send("Hello, world!")
     await pipe.close()
 
+# Simple command using the `CommandDuplexContext` as a ctx manager.
+
 @cmd_handler.command("example-context")
 async def cmd_example_context(pipe:main.CommandDuplexContext):
     async with pipe as p:
@@ -25,19 +29,38 @@ async def cmd_example_context(pipe:main.CommandDuplexContext):
 
         await p.send("Hello, world!")
 
+# Command showing a persistent duplex connection.
+
+@cmd_handler.command("example-persistent")
+async def cmd_example_persistent(pipe:main.CommandDuplexContext):
+    async with pipe as p:
+        print("Starting persistent command handler!")
+
+        while True:
+            await p.send(await p.recv())
+            await p.send("Next message")
+
+# Load a long-poll session manager for the API key `my key`.  
+# > In a production environment you'd want to store the hashed key,
+# and load that instead of hashing the plaintext key at runtime.
+
 sessions = duplex.QuartLongPollSessionManager(
     cmd_handler,
     hasher.hash("my key"),
     hasher
 )
 
-# prepare quart app
+# Prepare a simple quart app.
 
 app = Quart(__name__)
+
+# Home path is not needed but is recommended.
 
 @app.route("/")
 async def index():
     return "OK"
+
+# `/auth` path is used to start a session.
 
 @app.route("/auth", methods=["POST"])
 async def auth():
@@ -51,10 +74,12 @@ async def auth():
 
     return response
 
+# POST and PUT handlers for `/pbj` are linked to the session handler.
+
 app.route("/pbj", methods=["POST"])(sessions.request_handler)
 app.route("/pbj", methods=["PUT"])(sessions.push_handler)
 
-# and run
+# And run the app!
 
 if __name__ == "__main__":
     app.run("127.0.0.1", 8080)
