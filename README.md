@@ -52,6 +52,11 @@ app = Quart(__name__)
 The result is a PB&J instance available at `/pbj`.  
 For a more detailed example, see [example.py](./example/example.py).
 
+> [!WARNING]
+> When using the long-poll manager, you must ensure your ASGI server supports the TTL setting you have applied, since some requests will last this long.  
+> For Hypercorn, you can add `--keep-alive <ttl>` to the command line args, for example:  
+> `hypercorn --keep-alive 60 file.py:app`
+
 A websocket-based manager is also available, but this will not be fully maintained and recommended until Roblox releases websocket support in live experiences.
 
 ## Client Usage

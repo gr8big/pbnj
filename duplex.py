@@ -75,10 +75,11 @@ async def dump_request_body(f:asyncio.StreamReader, chunk_size:int=8192):
     f.feed_eof()
 
 class QuartLongPollManager:
-    def __init__(self, cooldown:float=.2):
+    def __init__(self, cooldown:float=.2, conn_ttl=45.0):
         self.__outgoing = asyncio.Queue()
         self.__incoming = asyncio.Queue()
         self.__cooldown = cooldown
+        self.__ttl = conn_ttl
 
     async def put(self, data:bytes):
         "Place data in the outgoing queue."
@@ -86,10 +87,16 @@ class QuartLongPollManager:
         self.__outgoing.put_nowait(data)
 
     async def pack_outgoing(self, to:asyncio.StreamReader):
-        data = [await self.__outgoing.get()]
+        data = []
 
-        while not self.__outgoing.empty():
-            data.append(self.__outgoing.get_nowait())
+        try:
+            async with asyncio.timeout(self.__ttl):
+                data.append(await self.__outgoing.get())
+
+                while not self.__outgoing.empty():
+                    data.append(self.__outgoing.get_nowait())
+        except asyncio.TimeoutError:
+            pass
 
         to.feed_data(len(data).to_bytes(4, "little", signed=False))
         for i in data:
