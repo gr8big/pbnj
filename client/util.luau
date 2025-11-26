@@ -69,7 +69,7 @@ export type DuplexHandler = {
     clean: (self:DuplexHandler, cmd:string) -> nil,
     connect: (self:DuplexHandler, key:string, auth_endpoint:string) -> nil,
     shutdown: (self:DuplexHandler) -> nil,
-    
+
     on_error: (self:DuplexHandler, callback:(msg:string) -> nil) -> nil
 }
 
@@ -88,11 +88,13 @@ export type CommandWrapper = {
     on_close: (self:CommandWrapper, callback:(self:CommandWrapper) -> nil) -> nil
 }
 
--- utility
+export type ExplicitFramePackage = {
+    frame: string,
+    content: string,
+    __explicit_frame: true
+}
 
-local pack_eof = function(status:number, message:string): string
-    return string.pack("B<s1", status, message)
-end
+-- utility
 
 local unpack_eof = function(data:string): (number,string)
     return string.unpack("B<s1", data)
@@ -161,6 +163,10 @@ local duplex_send_handler = function(self:DuplexHandler)
 
         task.wait(.2) -- safety barrier for http service limits
         local messages = {self.__outgoing:get()}
+
+        task.wait()
+        -- that wait allows messages to accumulate over the rest of the frame
+
         while #self.__outgoing.__queue > 0 do
             messages[#messages+1] = self.__outgoing:get_nowait()
         end
@@ -224,8 +230,9 @@ end
 
 local pack_frame = function(v:any): string
     local tpe = typeof(v)
-    if tpe == "string" then
-        -- either string or bytes, TODO: detect the correct frame type and don't just default to binary
+    if tpe == "table" and v.__explicit_frame then
+        return v.frame.. v.content
+    elseif tpe == "string" then
         return FRAME_BINARY.. v
     elseif tpe == "table" or tpe == "number" or tpe == "boolean" then
         return FRAME_JSON.. http:JSONEncode(v)

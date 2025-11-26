@@ -208,6 +208,9 @@ class CommandDuplexContext:
             data = await self.__wraps.recv(self.__cmd)
 
             if data.startswith(FRAME_EOF):
+                # If a client has sent an EOF frame, something has gone seriously wrong.
+                # Nevertheless, we shall handle it and pretend it never happened.
+
                 status, msg = await unpack_eof(data)
                 self.close_status = status[0]
                 self.close_reason = msg

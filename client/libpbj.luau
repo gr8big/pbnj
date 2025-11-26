@@ -20,6 +20,7 @@ along with PB\&J; see the file LICENSE.md.  If not see
 
 -- imports
 
+local http = game:GetService("HttpService")
 local util = require(script.Parent:WaitForChild("util"))
 
 -- the class
@@ -75,10 +76,44 @@ local tmp_pbjapi: PbjApi = {
 
 local PbjApi = util.constructor(tmp_pbjapi)
 
+-- final utils
+
+local pack_frame = function(type:number, content:string): util.ExplicitFramePackage
+    
+end
+
 -- module
 
 return {
+    -- Construct a new `PbjApi` object.
+    -- * @constructor
+    -- * @param {string} base_url The base URL to use for requests.
+    -- * @returns {PbjApi}
     new = function(base_url:string): PbjApi
         return PbjApi(base_url)
-    end
+    end,
+
+    -- Pack a frame using an explicitly defined type.
+    -- * @constructor
+    -- * @param {number} type The frame type to use. Must be in the range 0 to 255, inclusive.
+    -- * @param {string} content The data to package with the frame.
+    -- * @returns {ExplicitFramePackage}
+    frame = pack_frame,
+
+    -- Pack a text frame. Equivalent to calling `frame()` with type `0x41`.
+    -- * @param {string} ctn The text contents.
+    -- * @returns {ExplicitFramePackage}
+    text_frame = function(ctn) return pack_frame(0x41, ctn) end,
+
+    -- Pack a binary frame. Equivalent to calling `frame()` with type `0x40`.
+    -- * @param {string} ctn The binary contents.
+    -- * @returns {ExplicitFramePackage}
+    binary_frame = function(ctn) return pack_frame(0x40, ctn) end,
+
+    -- Pack a JSON frame, encoding the content.
+    -- * @param {string} ctn The object to encode.
+    -- * @returns {ExplicitFramePackage}
+    json_frame = function(ctn)
+        return pack_frame(0x50, http:JSONEncode(ctn))
+    end,
 }
