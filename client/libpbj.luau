@@ -26,10 +26,13 @@ local util = require(script.Parent:WaitForChild("util"))
 
 export type PbjApi = {
     __id_prog: number,
+    __locked_ids: {[number]:boolean},
 
     wraps: util.DuplexHandler,
     connect: (self:PbjApi, key:string, auth_endpoint:string?) -> nil,
-    run: (self:PbjApi, command:string) -> util.CommandWrapper
+    run: (self:PbjApi, command:string) -> util.CommandWrapper,
+
+    on_error: (self:PbjApi, callback:(msg:string) -> nil) -> nil
 }
 
 -- the template
@@ -37,6 +40,7 @@ export type PbjApi = {
 local tmp_pbjapi: PbjApi = {
     __init__ = function(self:PbjApi, base_url:string)
         self.__id_prog = 0
+        self.__locked_ids = {}
         self.wraps = util.DuplexHandler(base_url)
     end,
 
@@ -44,11 +48,26 @@ local tmp_pbjapi: PbjApi = {
         self.wraps:connect(key, auth_endpoint)
     end,
     run = function(self:PbjApi, command:string): util.CommandWrapper
+        self.__id_prog = (self.__id_prog + 1) % 4294967295
+        while self.__locked_ids[self.__id_prog] do
+            self.__id_prog = (self.__id_prog + 1) % 4294967295
+        end
+
         local id = self.__id_prog
-        self.__id_prog = (self.__id_prog + 1) % 2147483648
+        self.__locked_ids[id] = true
 
         self.wraps:send(string.pack("c4<I4s1", "\xff\xff\xff\xff", id, command))
-        return util.CommandWrapper(self.wraps, string.pack("<I4", id))
+        local res = util.CommandWrapper(self.wraps, string.pack("<I4", id))
+
+        res:on_close(function(this)
+            self.__locked_ids[id] = false
+        end)
+
+        return res
+    end,
+
+    on_error = function(self:PbjApi, callback:(msg:string) -> nil)
+        self.wraps:on_error(callback)
     end
 }
 

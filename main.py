@@ -52,7 +52,7 @@ class InternalCommandError(CommandError):
 
 async def pack_eof(status:bytes, message:str) -> bytes:
     raw = bytes(message, "utf8")
-    return status + len(raw).to_bytes(1, "little", signed=False) + raw
+    return FRAME_EOF + status + len(raw).to_bytes(1, "little", signed=False) + raw
 
 async def pack_frame(v:typing.Any) -> bytes:
     if isinstance(v, str):
@@ -198,7 +198,7 @@ class CommandDuplexContext:
         self.__cmd = cmd_id
         self.__final_queue = asyncio.Queue()
         self.__producer = asyncio.create_task(self.__consumer())
-        self.__lock = True
+        self.__lock = False
         self.close_status = -1
         self.close_reason = ""
 
@@ -223,6 +223,7 @@ class CommandDuplexContext:
         if self.__lock is True:
             raise RuntimeError("Attempt to operate on closed command context")
 
+        print("sending", data)
         await self.__wraps.send(self.__cmd + await pack_frame(data))
 
     async def recv(self) -> str|bytes|dict|list|int|float|None:
@@ -250,7 +251,7 @@ class CommandDuplexContext:
             raise RuntimeError("Attempt to operate on closed command context")
 
         await self.__wraps.send(self.__cmd + await pack_eof(status, reason))
-        self.__wraps.clean(self.__cmd)
+        await self.__wraps.clean(self.__cmd)
         self.__final_queue.shutdown(True)
         self.__producer.cancel()
 

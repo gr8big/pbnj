@@ -84,6 +84,7 @@ class QuartLongPollManager:
     async def put(self, data:bytes):
         "Place data in the outgoing queue."
 
+        print("put", data)
         self.__outgoing.put_nowait(data)
 
     async def pack_outgoing(self, to:asyncio.StreamReader):
@@ -174,6 +175,7 @@ class QuartLongPollHandler(main.BaseDuplexHandler):
         return await self.__manager.recv()
 
     async def send(self, data:bytes):
+        print("sending", data, "to manager")
         await self.__manager.put(data)
 
     async def recv(self, cmd:bytes):

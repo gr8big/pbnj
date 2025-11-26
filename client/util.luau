@@ -40,10 +40,13 @@ STATUS_NOTFOUND = 0xa0
 export type Queue = {
     __queue: {any},
     __waiting: {(v:any) -> nil},
+    __locked: boolean,
 
     put: (self:Queue, v:any) -> nil,
     get: (self:Queue) -> any,
-    get_nowait: (self:Queue) -> any
+    get_nowait: (self:Queue) -> any,
+
+    shutdown: (self:Queue) -> nil
 }
 
 export type DuplexHandler = {
@@ -56,29 +59,53 @@ export type DuplexHandler = {
     __task_o: thread,
     __session_id: string?,
     __session_token: string?,
+    __fail_count: number,
+    __max_fail_count: number,
+    __on_error: {(msg:string) -> nil},
 
     base_url: string,
     send: (self:DuplexHandler, v:string) -> nil,
     recv: (self:DuplexHandler, cmd:string) -> nil,
     clean: (self:DuplexHandler, cmd:string) -> nil,
-    connect: (self:DuplexHandler, key:string, auth_endpoint:string) -> nil
+    connect: (self:DuplexHandler, key:string, auth_endpoint:string) -> nil,
+    shutdown: (self:DuplexHandler) -> nil,
+    
+    on_error: (self:DuplexHandler, callback:(msg:string) -> nil) -> nil
 }
 
 export type CommandWrapper = {
     __wraps: DuplexHandler,
     __command: string,
     __locked: boolean,
+    __onclose: {(self:CommandWrapper) -> nil},
+    __final_queue: Queue,
+    __task: thread,
 
     send: (self:CommandWrapper, v:any) -> nil,
     recv: (self:CommandWrapper) -> any,
-    close: (self:CommandWrapper) -> nil
+    close: (self:CommandWrapper) -> nil,
+
+    on_close: (self:CommandWrapper, callback:(self:CommandWrapper) -> nil) -> nil
 }
 
 -- utility
 
+local pack_eof = function(status:number, message:string): string
+    return string.pack("B<s1", status, message)
+end
+
+local unpack_eof = function(data:string): (number,string)
+    return string.unpack("B<s1", data)
+end
+
+
+local dispatch_request = function(opts): {[string]:any}
+    return http:RequestAsync(opts)
+end
+
 local duplex_recv_handler = function(self:DuplexHandler)
     while true do
-        local res = http:RequestAsync(
+        local s, res = pcall(dispatch_request,
             {
                 Url = self.base_url,
                 Method = "POST",
@@ -91,7 +118,9 @@ local duplex_recv_handler = function(self:DuplexHandler)
             }
         )
 
-        if res.Success then
+        if s and res.Success then
+            self.__fail_count = 0
+
             local ctn: string = res.Body
             local count = string.unpack("<I4", ctn)
             local cursor = 5
@@ -109,7 +138,19 @@ local duplex_recv_handler = function(self:DuplexHandler)
                 end
             end
         else
-            warn(`PBJ API hit failed (status {res.StatusCode})`)
+            self.__fail_count += 1
+            if s then
+                warn(`PBJ API hit failed (status {res.StatusCode})`)
+            else
+                warn(`PBJ API hit failed (error: "{res}")`)
+            end
+
+            if self.__fail_count >= self.__max_fail_count then
+                for _, v in pairs(self.__on_error) do
+                    task.spawn(v, "Max HTTP failures exceeded error threshold")
+                end
+                error("Max HTTP failures exceeded error threshold", 0)
+            end
         end
     end
 end
@@ -130,7 +171,7 @@ local duplex_send_handler = function(self:DuplexHandler)
             msg_buffer[#msg_buffer+1] = v
         end
 
-        local res = http:RequestAsync(
+        local s, res = pcall(dispatch_request,
             {
                 Url = self.base_url,
                 Method = "PUT",
@@ -143,17 +184,43 @@ local duplex_send_handler = function(self:DuplexHandler)
             }
         )
 
-        if not res.Success then
-            warn(`PBJ API hit failed (status {res.StatusCode})`)
+        if s and res.Success then
+            self.__fail_count = 0
+        else
+            self.__fail_count += 1
+            if s then
+                warn(`PBJ API hit failed (status {res.StatusCode})`)
+            else
+                warn(`PBJ API hit failed (error: "{res}")`)
+            end
+
+            if self.__fail_count >= self.__max_fail_count then
+                for _, v in pairs(self.__on_error) do
+                    task.spawn(v, "Max HTTP failures exceeded error threshold")
+                end
+                error("Max HTTP failures exceeded error threshold", 0)
+            end
         end
         table.clear(msg_buffer)
     end
 end
 
 
-local pack_eof = function(status:number, message:string): string
-    return string.pack("B<s1", status, message)
+local cmd_wrapper_recv_handler = function(self:CommandWrapper)
+    while true do
+        local data = self.__wraps:recv(self.__command)
+
+        if string.sub(data, 1, 1) == FRAME_EOF then
+            local status, message = unpack_eof(string.sub(data, 2))
+            -- TODO: add some handler for status & message
+
+            self:close()
+        else
+            self.__final_queue:put(data)
+        end
+    end
 end
+
 
 local pack_frame = function(v:any): string
     local tpe = typeof(v)
@@ -173,9 +240,14 @@ local tmp_queue: Queue = {
     __init__ = function(self:Queue)
         self.__queue = {}
         self.__waiting = {}
+        self.__locked = false
     end,
 
     put = function(self:Queue, v:any)
+        if self.__locked then
+            error("Attempt to operate on closed queue", 0)
+        end
+
         if #self.__waiting > 0 then
             table.remove(self.__waiting, 1)(v)
         else
@@ -191,6 +263,10 @@ local tmp_queue: Queue = {
         local res
 
         self.__waiting[#self.__waiting+1] = function(v)
+            if (not v) and self.__locked then
+                error("Queue was shut down", 0)
+            end
+
             res = v
             local ok, err = coroutine.resume(co)
             if not ok then
@@ -206,11 +282,21 @@ local tmp_queue: Queue = {
             return table.remove(self.__queue, 1)
         end
         error("Queue is empty", 0)
+    end,
+
+    shutdown = function(self:Queue)
+        self.__locked = true
+
+        for _, v in pairs(self.__waiting) do
+            v()
+        end
+
+        table.clear(self.__waiting)
     end
 }
 
 local tmp_duplexhandler: DuplexHandler = {
-    __init__ = function(self:DuplexHandler, base_url:string)
+    __init__ = function(self:DuplexHandler, base_url:string, max_fails:number)
         while string.sub(base_url, #base_url) == "/" do
             base_url = string.sub(base_url, 1, #base_url - 1)
         end
@@ -219,7 +305,15 @@ local tmp_duplexhandler: DuplexHandler = {
         self.__incoming = cnstr.Queue()
         self.__queues = {}
         self.__cmd_progress = 0
+        self.__fail_count = 0
+        self.__max_fail_count = max_fails or 1
+        self.__on_error = {}
         self.base_url = base_url
+
+        self:on_error(function(msg)
+            pcall(self.shutdown, self)
+            error(msg, 0)
+        end)
     end,
 
     __get_queue = function(self:DuplexHandler, cmd:string): Queue
@@ -258,9 +352,23 @@ local tmp_duplexhandler: DuplexHandler = {
     end,
     clean = function(self:DuplexHandler, cmd:string)
         if self.__queues[cmd] then
-            table.clear(self.__queues[cmd])
+            self.__queues[cmd]:shutdown()
             self.__queues[cmd] = nil
         end
+    end,
+    shutdown = function(self:DuplexHandler)
+        self.__outgoing:shutdown()
+        self.__incoming:shutdown()
+        for _, v in pairs(self.__queues) do
+            v:shutdown()
+        end
+
+        task.cancel(self.__task_i)
+        task.cancel(self.__task_o)
+    end,
+
+    on_error = function(self:DuplexHandler, callback:(msg:string) -> nil)
+        self.__on_error[#self.__on_error+1] = callback
     end
 }
 
@@ -269,6 +377,9 @@ local tmp_commandwrapper: CommandWrapper = {
         self.__wraps = wraps
         self.__command = cmd_id
         self.__locked = false
+        self.__onclose = {}
+        self.__final_queue = cnstr.Queue()
+        self.__task = task.spawn(cmd_wrapper_recv_handler, self)
     end,
 
     send = function(self:CommandWrapper, v:any)
@@ -279,11 +390,7 @@ local tmp_commandwrapper: CommandWrapper = {
         self.__wraps:send(self.__command + pack_frame(v))
     end,
     recv = function(self:CommandWrapper): any
-        if self.__locked then
-            error("Attempt to operate on closed command wrapper", 0)
-        end
-
-        local data = self.__wraps:recv(self.__command)
+        local data = self.__final_queue:get()
         local frame = string.sub(data, 1, 1)
         data = string.sub(data, 2)
 
@@ -300,8 +407,23 @@ local tmp_commandwrapper: CommandWrapper = {
         error(`Server sent invalid frame type: {frame}`, 0)
     end,
     close = function(self:CommandWrapper)
+        if self.__locked then
+            -- no need to close, we already have!
+            return
+        end
+
         self.__locked = true
+
         self.__wraps:clean(self.__command)
+        self.__final_queue:shutdown()
+
+        for _, v in pairs(self.__onclose) do
+            v(self)
+        end
+    end,
+
+    on_close = function(self:CommandWrapper, callback:(self:CommandWrapper) -> nil)
+        self.__onclose[#self.__onclose+1] = callback
     end
 }
 
