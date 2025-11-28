@@ -79,7 +79,7 @@ local PbjApi = util.constructor(tmp_pbjapi)
 -- final utils
 
 local pack_frame = function(type:number, content:string): util.ExplicitFramePackage
-    
+    return string.char(type).. content
 end
 
 -- module
