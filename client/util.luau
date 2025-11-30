@@ -33,7 +33,7 @@ FRAME_JSON = "\x50"
 FRAME_EOF = "\xff"
 
 STATUS_OK = 0x00
-STATUS_NOTFOUND = 0xa0
+STATUS_NOTFOUND = 0xa1
 
 -- classes
 

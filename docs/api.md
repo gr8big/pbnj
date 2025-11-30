@@ -33,5 +33,16 @@ The status is used as a broad success/failure indicator, where any status from `
 The general method for rejecting a command is to use a standard status (see below) and a custom reason. Under no circumstances should a non-standard status code be used.
 
 The following status codes are available:
-- `00` - Generic OK - The command completed without issue.
-- `a0` - Not found - The requeted resource couldn't be found.
+- `0x00` - Generic OK - The command completed without issue.
+- `0x10` - Partial - The command completed and a partial response was returned.
+- `0x11` - Continue - The command completed and another command can now be used.
+- `0x20` - Warning - The command completed but a warning is attached.
+- `0x21` - No Content - The command completed without a response.
+
+and the failure error codes:
+- `0xa0` - Generic Failure - The command failed.
+- `0xa1` - Not found - The requeted resource couldn't be found.
+- `0xb0` - Unauthorized - The command couldn't be completed because the client is not authorized.
+- `0xb1` - Bad Message - The client provided an invalid message.
+- `0xb2` - Conflict - The command couldn't complete because it conflicts with the state of the server.
+- `0xc0` - Time Out - The client didn't provide a required message in time.

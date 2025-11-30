@@ -39,7 +39,7 @@ FRAME_JSON = b"\x50"
 FRAME_EOF = b"\xff"
 
 STATUS_OK = b"\x00"
-STATUS_NOTFOUND = b"\xa0"
+STATUS_NOTFOUND = b"\xa1"
 
 # exceptions
 
@@ -178,6 +178,25 @@ class BaseDuplexHandler:
     async def clean(self, cmd:bytes):
         "Clean any data used to handle messages for a specific command."
         pass
+
+# status codes
+
+class StatusCode:
+    def __init__(self):
+        pass
+
+    OK = b"\x00"
+    PARTIAL = b"\x10"
+    CONTINUE = b"\x11"
+    WARNING = b"\x20"
+    NO_CONTENT = b"\x21"
+
+    FAILURE = b"\xa0"
+    NOT_FOUND = b"\xa1"
+    UNAUTHORIZED = b"\xb0"
+    BAD_MESSAGE = b"\xb1"
+    CONFLICT = b"\xb2"
+    TIME_OUT = b"\xc0"
 
 # commands
 
